@@ -96,7 +96,7 @@ If you find this code useful, please cite:
 
 ```bibtex
 @article{GAM2_2026,
-  title={Automatic arbitrary-fidelity metamodeling via gated information routing and Bayesian active learning},
+  title={Arbitrary unknown fidelity metamodeling via dual-gated mixture-of-experts and Bayesian active learning},
   author={},
   journal={},
   year={2026}
