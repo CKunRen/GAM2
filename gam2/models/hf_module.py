@@ -1,62 +1,50 @@
-"""
-HF Prediction Module (Eq.7-8)
-Fuses gated expert predictions with base class features via skip connection,
-then passes through deterministic layers + BayesianLinear output.
+"""HF prediction module (Eqs. (6)-(11) of the paper).
 
-  - num_det_layers=2 (default): Linear→Act → Linear→Act → BayesianLinear
-  - num_det_layers=1:           Linear→Act → BayesianLinear
-  - num_det_layers=0:           BayesianLinear only
-  - residual=True:              mu = h_fused + correction (HF learns correction)
-  - activation: 'leaky_relu' (default) or 'tanh'
+The module receives the concatenation of the quality-gated expert predictions
+and the base feature (Eq. (6)):
+
+    [q_1 h_1, ..., q_{s-1} h_{s-1} ; h_base]
+
+and maps it to the HF output through ``hidden_layers`` deterministic layers
+followed by the Bayesian output layer.  With scalar expert outputs the input
+width is h + s - 1, as in Table 1.
 """
 
 import torch
 import torch.nn as nn
-from models.bayesian_linear import BayesianLinear
 
-
-def _get_activation(name: str) -> nn.Module:
-    if name == 'tanh':
-        return nn.Tanh()
-    return nn.LeakyReLU(0.01)
+from .base_module import make_activation
+from .bayesian_linear import BayesianLinear
 
 
 class HFPredictionModule(nn.Module):
+    """h_s = f_HF([q_1 h_1, ..., q_{s-1} h_{s-1} ; h_base]; theta_HF)."""
 
-    def __init__(self, fused_dim: int, base_dim: int, hidden_dim: int = 64,
-                 output_dim: int = 1, num_det_layers: int = 2,
-                 activation: str = 'leaky_relu', residual: bool = False,
-                 bayesian_bias: bool = True):
+    def __init__(self, hidden_size: int, num_experts: int,
+                 output_dim: int = 1, hidden_layers: int = 2,
+                 activation: str = 'relu', bias: bool = True,
+                 residual: bool = False):
         super().__init__()
+        if hidden_layers < 1:
+            raise ValueError('hidden_layers must be >= 1')
+        in_dim = hidden_size + num_experts * output_dim
+        self.in_dim = in_dim
+        self.hidden_layers = hidden_layers
         self.residual = residual
-        in_dim = fused_dim + base_dim
 
-        if num_det_layers >= 2:
-            self.layers = nn.Sequential(
-                nn.Linear(in_dim, hidden_dim), _get_activation(activation),
-                nn.Linear(hidden_dim, hidden_dim), _get_activation(activation),
-            )
-            bay_in = hidden_dim
-        elif num_det_layers == 1:
-            self.layers = nn.Sequential(
-                nn.Linear(in_dim, hidden_dim), _get_activation(activation),
-            )
-            bay_in = hidden_dim
-        else:
-            self.layers = nn.Identity()
-            bay_in = in_dim
+        layers = [nn.Linear(in_dim, hidden_size), make_activation(activation)]
+        for _ in range(hidden_layers - 1):
+            layers += [nn.Linear(hidden_size, hidden_size),
+                       make_activation(activation)]
+        self.layers = nn.Sequential(*layers)
+        self.output = BayesianLinear(hidden_size, output_dim, bias=bias)
 
-        self.bayesian_output = BayesianLinear(bay_in, output_dim, bias=bayesian_bias)
-
-    def forward(self, h_fused: torch.Tensor, h_base: torch.Tensor):
-        h = torch.cat([h_fused, h_base], dim=-1)
-        h_s = self.layers(h)
-        correction, var = self.bayesian_output(h_s)
-        if self.residual:
-            mu = h_fused + correction
-        else:
-            mu = correction
+    def forward(self, fused: torch.Tensor, skip: torch.Tensor = None):
+        h_s = self.layers(fused)
+        mu, var = self.output(h_s)
+        if self.residual and skip is not None:
+            mu = skip + mu
         return mu, var
 
     def kl_divergence(self) -> torch.Tensor:
-        return self.bayesian_output.kl_divergence()
+        return self.output.kl_divergence()

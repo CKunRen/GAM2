@@ -1,185 +1,138 @@
-"""
-Full DG-MoE-BNN Assembly
-Assembles Base Class, Expert Modules, Dual-Level Gating, and HF Prediction Module.
+"""DG-MoEs-BNN: dual-gated mixture-of-experts Bayesian neural network.
 
-Dual-level gating:
-  - Routing gates alpha_ij in {0,1}: binary, input-independent (STE)
-  - Quality gates q_t in [0,1]: input-dependent via expert penultimate features h_{t-}
+The module assembles the four components of the paper:
+
+1. base class module            Eq. (1)
+2. expert modules               Eq. (2)
+3. dual-level gating            Eqs. (3)-(5)
+4. HF prediction module         Eqs. (6)-(11)
+
+Routing is the sum over all other experts, Eq. (4).  Because the expert features
+themselves depend on the routed inputs, (4) is a coupled system; it is solved by
+``routing_exchanges`` Jacobi exchanges (default: one), i.e. the features are
+first computed with r_t = 0 and the routed inputs are then formed from those
+features.  One exchange is what the paper reports: it exchanges information in
+both directions for every ordered pair (i, t).
 """
 
 import torch
 import torch.nn as nn
-from models.base_module import BaseClassModule
-from models.expert_module import ExpertModule
-from models.gating import RoutingGates, QualityGate
-from models.hf_module import HFPredictionModule
+
+from .base_module import BaseClassModule
+from .expert_module import ExpertModule
+from .gating import QualityGate, RoutingGates
+from .hf_module import HFPredictionModule
+
+
+def table1_hidden_size(input_dim: int) -> int:
+    """Table 1: h = 16 for d <= 10, 64 for d > 10."""
+    return 16 if input_dim <= 10 else 64
 
 
 class DGMoEBNN(nn.Module):
-    """
-    Dual-Gated Mixture-of-Experts Bayesian Neural Network.
-    """
+    """Dual-gated mixture-of-experts Bayesian neural network."""
 
     def __init__(self, input_dim: int, num_lf_models: int,
-                 base_hidden: int = 64, expert_hidden: int = 64,
-                 hf_hidden: int = 64, output_dim: int = 1,
-                 use_conv: bool = True,
-                 expert_layers: int = 2,
-                 hf_det_layers: int = 2,
-                 activation: str = 'leaky_relu',
-                 base_layers: int = 1,
-                 residual: bool = False,
-                 quality_temperature: float = 1.0,
-                 routing_init: float = -2.0,
-                 bayesian_bias: bool = True,
-                 # legacy kwargs (ignored)
-                 quality_mode: str = 'softmax_input', **kwargs):
+                 hidden_size: int = None, output_dim: int = 1,
+                 kernel_size: int = 1, conv_padding: int = 0,
+                 use_conv: bool = True, base_layers: int = 1,
+                 activation: str = 'leaky_relu', expert_layers: int = 2,
+                 hf_layers: int = 2, gate_hidden: int = 16,
+                 routing_exchanges: int = 1, routing_init: float = -2.0,
+                 bayesian_bias: bool = True, residual: bool = True):
         super().__init__()
-        self.init_kwargs = dict(
-            input_dim=input_dim,
-            num_lf_models=num_lf_models,
-            base_hidden=base_hidden,
-            expert_hidden=expert_hidden,
-            hf_hidden=hf_hidden,
-            output_dim=output_dim,
-            use_conv=use_conv,
-            expert_layers=expert_layers,
-            hf_det_layers=hf_det_layers,
-            activation=activation,
-            base_layers=base_layers,
-            residual=residual,
-            quality_temperature=quality_temperature,
-            routing_init=routing_init,
-            bayesian_bias=bayesian_bias,
-            quality_mode=quality_mode,
-            **kwargs,
-        )
+        if num_lf_models < 1:
+            raise ValueError('at least one low-fidelity model is required')
         self.input_dim = input_dim
-        self.num_experts = num_lf_models
         self.output_dim = output_dim
-        self.hf_hidden = hf_hidden
-        self.use_conv = use_conv
-        self.expert_layers = expert_layers
-        self.hf_det_layers = hf_det_layers
-        self.activation = activation
-        self.base_layers = base_layers
-        self.residual = residual
-        self.quality_temperature = quality_temperature
-        self.routing_init = routing_init
-        self.bayesian_bias = bayesian_bias
-        self.quality_mode = quality_mode
+        self.num_experts = num_lf_models
+        self.routing_exchanges = int(routing_exchanges)
+        self.hidden_size = (hidden_size if hidden_size is not None
+                            else table1_hidden_size(input_dim))
 
-        # 1. Base class module
         self.base_module = BaseClassModule(
-            input_dim, base_hidden,
-            use_conv=use_conv, activation=activation,
-            base_layers=base_layers)
-
-        # 2. Expert modules
-        expert_input_dim = base_hidden + expert_hidden
+            input_dim, self.hidden_size, kernel_size=kernel_size,
+            padding=conv_padding, activation=activation,
+            use_conv=use_conv, base_layers=base_layers)
         self.experts = nn.ModuleList([
-            ExpertModule(expert_input_dim, expert_hidden, output_dim,
-                         num_hidden=expert_layers, activation=activation)
+            ExpertModule(self.hidden_size, output_dim,
+                         hidden_layers=expert_layers, activation=activation)
             for _ in range(num_lf_models)
         ])
-
-        # 3. Dual-level gating
-        if num_lf_models > 1:
-            self.routing_gates = RoutingGates(num_lf_models,
-                                              init_value=routing_init)
-        else:
-            self.routing_gates = None
-
-        # Quality gate: shared MLP on h_{t-} (expert penultimate features)
-        self.quality_gate = QualityGate(
-            expert_hidden=expert_hidden,
-            num_experts=num_lf_models,
-            temperature=quality_temperature)
-
-        # 4. HF prediction module
+        self.routing_gates = (RoutingGates(num_lf_models, init_value=routing_init)
+                              if num_lf_models > 1 else None)
+        self.quality_gate = QualityGate(self.hidden_size, gate_hidden,
+                                        activation=activation)
         self.hf_module = HFPredictionModule(
-            fused_dim=output_dim,
-            base_dim=base_hidden,
-            hidden_dim=hf_hidden,
-            output_dim=output_dim,
-            num_det_layers=hf_det_layers,
-            activation=activation,
-            residual=residual,
-            bayesian_bias=bayesian_bias,
-        )
+            self.hidden_size, num_lf_models, output_dim=output_dim,
+            hidden_layers=hf_layers, activation=activation,
+            bias=bayesian_bias, residual=residual)
 
-        self.base_hidden = base_hidden
-        self.expert_hidden = expert_hidden
+    # ------------------------------------------------------------------
+    # forward
+    # ------------------------------------------------------------------
+    def _expert_pass(self, h_base: torch.Tensor, features):
+        """One sweep of experts over the given (routed) features."""
+        preds, penult = [], []
+        zero = torch.zeros_like(h_base)
+        for t, expert in enumerate(self.experts):
+            if self.routing_gates is None:
+                r = zero
+            else:
+                r = self.routing_gates.routed_feature(features, t)
+            y_t, h_t_minus = expert(torch.cat([h_base, r], dim=-1))
+            preds.append(y_t)
+            penult.append(h_t_minus)
+        return preds, penult
 
     def forward(self, x: torch.Tensor, stage: int = 2):
-        batch_size = x.size(0)
-
-        # 1. Base class features
+        """Returns (mu, var, predictions, quality_gates, routing_gates)."""
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
         h_base = self.base_module(x)
 
-        # 2. Expert computation — collect predictions AND penultimate features
-        lf_preds = []
-        h_minus_list = []
+        # sweep 0: experts without routing (r_t = 0)
+        preds, features = self._expert_pass(h_base, None if self.routing_gates
+                                            is None else
+                                            [torch.zeros_like(h_base)
+                                             for _ in range(self.num_experts)])
+        # Jacobi exchanges of Eq. (4)
+        if stage != 1 and self.routing_gates is not None:
+            for _ in range(self.routing_exchanges):
+                preds, features = self._expert_pass(h_base, features)
 
-        if stage == 1 or self.routing_gates is None:
-            zero_routing = torch.zeros(batch_size, self.expert_hidden,
-                                       device=x.device)
-            for t in range(self.num_experts):
-                expert_input = torch.cat([h_base, zero_routing], dim=-1)
-                h_t, h_t_minus = self.experts[t](expert_input)
-                lf_preds.append(h_t)
-                h_minus_list.append(h_t_minus)
-        else:
-            h_minus_init = [
-                torch.zeros(batch_size, self.expert_hidden, device=x.device)
-                for _ in range(self.num_experts)
-            ]
-            for j in range(self.num_experts):
-                r_j = self.routing_gates.compute_routing(h_minus_init, j)
-                expert_input = torch.cat([h_base, r_j], dim=-1)
-                h_t, h_t_minus = self.experts[j](expert_input)
-                lf_preds.append(h_t)
-                h_minus_list.append(h_t_minus)
-                h_minus_init[j] = h_t_minus
+        # quality gates, Eq. (5)
+        q = self.quality_gate(features)
+        q_list = [q[:, t:t + 1] for t in range(self.num_experts)]
 
-        # 3. Quality gates — input-dependent via h_{t-} (Eq.5-6)
-        q_values = self.quality_gate.forward_all(h_minus_list)
+        # fusion, Eq. (6)
+        fused = torch.cat([q_list[t] * preds[t]
+                           for t in range(self.num_experts)] + [h_base], dim=-1)
+        skip = sum(q_list[t] * preds[t] for t in range(self.num_experts))
+        mu, var = self.hf_module(fused, skip)
 
-        # 4. Gate-weighted fusion (Eq.7)
-        h_fused = torch.zeros(batch_size, self.output_dim, device=x.device)
-        for t in range(self.num_experts):
-            h_fused = h_fused + q_values[t] * lf_preds[t]
-
-        # 5. HF prediction (Eq.8, 10, 11)
-        mu, var = self.hf_module(h_fused, h_base)
-
-        # 6. Collect routing gate values
-        alpha_values = {}
-        if self.routing_gates is not None:
-            for i in range(self.num_experts):
-                for j in range(self.num_experts):
-                    if i != j:
-                        alpha_values[(i, j)] = self.routing_gates.get_alpha(i, j)
-
-        return mu, var, lf_preds, q_values, alpha_values
+        alphas = (self.routing_gates.all_alphas()
+                  if self.routing_gates is not None else {})
+        return mu, var, preds, q_list, alphas
 
     def kl_divergence(self) -> torch.Tensor:
+        """KL divergence of the Bayesian output layer (Eq. (14))."""
         return self.hf_module.kl_divergence()
 
-    def get_parameter_groups(self, base_lr: float):
-        param_groups = [
-            {'params': self.base_module.parameters(), 'lr': base_lr * 0.01},
-            {'params': self.experts.parameters(), 'lr': base_lr * 0.1},
-            {'params': self.hf_module.parameters(), 'lr': base_lr},
-        ]
-        if self.routing_gates is not None:
-            param_groups.append(
-                {'params': self.routing_gates.parameters(), 'lr': base_lr}
-            )
-        param_groups.append(
-            {'params': self.quality_gate.parameters(), 'lr': base_lr}
+    # ------------------------------------------------------------------
+    # introspection
+    # ------------------------------------------------------------------
+    def architecture_summary(self) -> dict:
+        """Layer widths, for checks against the configuration table."""
+        n = self.num_experts
+        return dict(
+            input_dim=self.input_dim,
+            use_conv=self.base_module.use_conv,
+            hidden_size=self.hidden_size,
+            num_lf_models=n,
+            base_length=self.base_module.length,
+            expert_in=2 * self.hidden_size,
+            hf_in=self.hf_module.in_dim,
+            hf_in_expected=self.hidden_size + n * self.output_dim,
+            routing_gates=n * (n - 1),
         )
-        return param_groups
-
-    def rebuild_same(self):
-        return type(self)(**self.init_kwargs)

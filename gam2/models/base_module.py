@@ -1,63 +1,74 @@
-"""
-Base Class Module (Eq.1)
-Shared feature extractor.
-  - use_conv=True  (default): Conv1d(1→16→32→64) + Linear(64d→h) — for high-d
-  - use_conv=False: Linear MLP for low-d problems
-  - activation: 'leaky_relu' (default) or 'tanh'
-  - base_layers: number of Linear layers in MLP mode (1 or 2, default 1)
+"""Base class module (Eq. (1) of the paper).
+
+A shared feature extractor applied to every input before the experts.  Two
+stems are supported, both configurable:
+
+    convolutional (default for d > 1)
+        Conv1d(1 -> 16, k) -> act -> Conv1d(16 -> 32, k) -> act
+            -> Conv1d(32 -> 64, k) -> act -> flatten -> Linear(64 L -> h) -> act
+
+    MLP  (``use_conv=False``; used by the one-dimensional examples)
+        Linear(d -> h) -> act [-> Linear(h -> h) -> act]
+
+The number of MLP layers is controlled by ``base_layers``.
 """
 
 import torch
 import torch.nn as nn
 
 
-def _get_activation(name: str) -> nn.Module:
+def make_activation(name: str) -> nn.Module:
+    if name == 'relu':
+        return nn.ReLU()
+    if name == 'leaky_relu':
+        return nn.LeakyReLU(0.01)
     if name == 'tanh':
         return nn.Tanh()
-    return nn.LeakyReLU(0.01)
+    raise ValueError(f'unknown activation: {name}')
 
 
 class BaseClassModule(nn.Module):
-    """
-    h_base = f_base(x; θ_base)  (Eq.1)
-    """
+    """h_base = f_base(x; theta_base)."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 64,
-                 use_conv: bool = True, activation: str = 'leaky_relu',
+    def __init__(self, input_dim: int, hidden_size: int,
+                 kernel_size: int = 1, padding: int = 0,
+                 activation: str = 'relu', use_conv: bool = True,
                  base_layers: int = 1):
         super().__init__()
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.hidden_size = hidden_size
         self.use_conv = use_conv
 
         if use_conv:
-            self.conv_layers = nn.Sequential(
-                nn.Conv1d(1, 16, kernel_size=1), _get_activation(activation),
-                nn.Conv1d(16, 32, kernel_size=1), _get_activation(activation),
-                nn.Conv1d(32, 64, kernel_size=1), _get_activation(activation),
+            self.conv = nn.Sequential(
+                nn.Conv1d(1, 16, kernel_size, padding=padding),
+                make_activation(activation),
+                nn.Conv1d(16, 32, kernel_size, padding=padding),
+                make_activation(activation),
+                nn.Conv1d(32, 64, kernel_size, padding=padding),
+                make_activation(activation),
             )
-            self.fc = nn.Sequential(
-                nn.Linear(64 * input_dim, hidden_dim),
-                _get_activation(activation),
-            )
+            length = input_dim + 3 * (2 * padding - kernel_size + 1)
+            if length <= 0:
+                raise ValueError(
+                    f'convolution stem leaves no length for d={input_dim}, '
+                    f'kernel={kernel_size}, padding={padding}')
+            self.length = length
+            self.fc = nn.Sequential(nn.Linear(64 * length, hidden_size),
+                                    make_activation(activation))
         else:
-            # MLP for low-d; base_layers controls depth
-            if base_layers >= 2:
-                self.fc = nn.Sequential(
-                    nn.Linear(input_dim, hidden_dim), _get_activation(activation),
-                    nn.Linear(hidden_dim, hidden_dim), _get_activation(activation),
-                )
-            else:
-                self.fc = nn.Sequential(
-                    nn.Linear(input_dim, hidden_dim),
-                    _get_activation(activation),
-                )
+            self.length = input_dim
+            layers = [nn.Linear(input_dim, hidden_size),
+                      make_activation(activation)]
+            for _ in range(max(base_layers - 1, 0)):
+                layers += [nn.Linear(hidden_size, hidden_size),
+                           make_activation(activation)]
+            self.mlp = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.use_conv:
-            h = x.unsqueeze(1)
-            h = self.conv_layers(h)
-            h = h.view(h.size(0), -1)
-            return self.fc(h)
-        else:
-            return self.fc(x)
+        if x.dim() == 1:
+            x = x.unsqueeze(-1)
+        if not self.use_conv:
+            return self.mlp(x)
+        h = self.conv(x.unsqueeze(1)).flatten(1)
+        return self.fc(h)

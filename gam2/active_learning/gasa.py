@@ -7,12 +7,12 @@ import torch
 import numpy as np
 from copy import deepcopy
 
-from models.dg_moe_bnn import DGMoEBNN
-from training.trainer import GAM2Trainer
-from utils.metrics import rmse, improvement_rate
-from active_learning.adaptive_batch import AdaptiveBatchSize
-from active_learning.sample_selection import SampleSelector
-from active_learning.model_selection import GEAFModelSelector
+from ..models.dg_moe_bnn import DGMoEBNN
+from ..training.trainer import GAM2Trainer
+from ..utils.metrics import rmse, improvement_rate
+from .adaptive_batch import AdaptiveBatchSize
+from .sample_selection import SampleSelector
+from .model_selection import GEAFModelSelector
 
 
 class GASA:

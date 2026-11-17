@@ -1,52 +1,44 @@
-"""
-Expert Module (Eq.2)
-Each LF model gets a dedicated expert.
-  - num_hidden=2 (default): Linear→Act → Linear→Act → Linear(→1)
-  - num_hidden=1:           Linear→Act → Linear(→1)
-  - activation: 'leaky_relu' (default) or 'tanh'
-Exposes h_{t-} (penultimate features) for routing.
+"""Expert module (Eq. (2) of the paper).
+
+One expert per low-fidelity source.  It receives the base feature and the routed
+feature of the other experts, and returns both the LF prediction and the
+penultimate feature used by the routing and quality gates:
+
+    Linear(2h -> h) -> act [-> Linear(h -> h) -> act] -> Linear(h -> out)
+
+``hidden_layers`` selects one or two hidden layers (the paper uses two for the
+multi-dimensional examples and one for the one-dimensional ones).
 """
 
 import torch
 import torch.nn as nn
 
-
-def _get_activation(name: str) -> nn.Module:
-    if name == 'tanh':
-        return nn.Tanh()
-    return nn.LeakyReLU(0.01)
+from .base_module import make_activation
 
 
 class ExpertModule(nn.Module):
+    """(y_t, h_t^-) = f_t([h_base ; r_t])."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 64,
-                 output_dim: int = 1, num_hidden: int = 2,
-                 activation: str = 'leaky_relu'):
+    def __init__(self, hidden_size: int, output_dim: int = 1,
+                 hidden_layers: int = 2, activation: str = 'relu'):
         super().__init__()
+        if hidden_layers not in (1, 2):
+            raise ValueError('hidden_layers must be 1 or 2')
+        self.hidden_size = hidden_size
         self.output_dim = output_dim
-        self.hidden_dim = hidden_dim
-        self.num_hidden = num_hidden
+        self.hidden_layers = hidden_layers
 
-        if num_hidden >= 2:
-            self.layer1 = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim), _get_activation(activation))
-            self.layer2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), _get_activation(activation))
+        self.layer1 = nn.Sequential(nn.Linear(2 * hidden_size, hidden_size),
+                                    make_activation(activation))
+        if hidden_layers == 2:
+            self.layer2 = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                        make_activation(activation))
         else:
-            # Single hidden layer
-            self.layer1 = nn.Identity()
-            self.layer2 = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim), _get_activation(activation))
-
-        self.output_layer = nn.Linear(hidden_dim, output_dim)
+            self.layer2 = None
+        self.out = nn.Linear(hidden_size, output_dim)
 
     def forward(self, x: torch.Tensor):
-        """
-        Returns:
-            h_t:       (batch, output_dim) LF prediction
-            h_t_minus: (batch, hidden_dim) penultimate features for routing
-        """
-        h = self.layer1(x)
-        h_t_minus = self.layer2(h)
-        h_t = self.output_layer(h_t_minus)
-        return h_t, h_t_minus
+        z = self.layer1(x)
+        if self.layer2 is not None:
+            z = self.layer2(z)
+        return self.out(z), z

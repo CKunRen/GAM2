@@ -13,9 +13,9 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 
-from models.dg_moe_bnn import DGMoEBNN
-from training.meta_learning import MetaLearner
-from training.losses import AutoWeightedTotalLoss, ExpertLoss, HFLoss
+from ..models.dg_moe_bnn import DGMoEBNN
+from .meta_learning import MetaLearner
+from .losses import AutoWeightedTotalLoss, ExpertLoss, HFLoss
 
 
 class GAM2Trainer:

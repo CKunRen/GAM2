@@ -1,108 +1,131 @@
-# GAM2: Gated Adaptive Multi-Fidelity Metamodeling
+# GAM2 — Dual-Gated Mixture-of-Experts Bayesian Neural Network
 
-Official implementation of the paper:
+Reference implementation of the network and training procedure described in
 
-> **Automatic arbitrary-fidelity metamodeling via gated information routing and Bayesian active learning**
+> *Unified Fidelity-Agnostic Multi-Fidelity Modeling via Dual-Gated
+> Mixture-of-Experts and Bayesian Learning*
 
-## Overview
+This release contains the model, the training procedure and the gate-guided
+active-learning sampler, together with the scripts of the ONERA M6 case.
+It contains **no benchmark data**: the library is meant to be imported, and
+the M6 scripts expect the CFD data described in `m6/README.md`, which are
+available from the corresponding author on request. A single reference
+example, Example 3 of the paper, is provided in `examples/`; it generates
+its own data from the published formulas and reproduces the reported
+benchmark at the published configuration.
 
-GAM2 is a multi-fidelity surrogate modeling framework that handles **arbitrary fidelity configurations** (hierarchical, non-hierarchical, and hybrid) **without prior knowledge** of fidelity relationships. It consists of two core components:
+## What is included
 
-- **DG-MoE-BNN** (Dual-Gated Mixture-of-Experts Bayesian Neural Network): A neural network architecture with learnable routing gates and quality gates that automatically discover inter-fidelity information flow and suppress unreliable sources.
-- **GASA** (Gate-Guided Active Sampling Algorithm): An active learning algorithm that leverages learned gate values for cost-efficient multi-fidelity sample allocation.
-
-## Repository Structure
-
-```
-GAM2-public/
-├── gam2/
-│   ├── models/
-│   │   ├── base_module.py        # Shared feature extractor
-│   │   ├── expert_module.py      # Source-specific expert modules
-│   │   ├── gating.py             # Dual-level gating (routing + quality)
-│   │   ├── hf_module.py          # HF prediction with Bayesian output
-│   │   ├── bayesian_linear.py    # Bayesian linear layer
-│   │   └── dg_moe_bnn.py        # Full DG-MoE-BNN assembly
-│   ├── training/
-│   │   ├── losses.py             # Multi-task loss functions
-│   │   ├── trainer.py            # End-to-end / multi-stage trainer
-│   │   └── meta_learning.py      # Reptile meta-learning for base module
-│   ├── active_learning/
-│   │   ├── gasa.py               # GASA main loop (Algorithm 1)
-│   │   ├── model_selection.py    # GEAF fidelity selection
-│   │   ├── sample_selection.py   # Variance-guided sample selection
-│   │   └── adaptive_batch.py     # Adaptive batch sizing
-│   └── utils/
-│       ├── sampling.py           # LHS / Optimized LHS
-│       └── metrics.py            # RMSE, MaxAE, Improvement Rate
-├── examples/
-│   ├── demo.py                   # Quick demo (1D–50D synthetic functions)
-│   ├── E1_Forrester.py           # Example 1: 1D Forrester (hierarchical)
-│   └── test_common.py            # Shared evaluation utilities
-├── requirements.txt
-└── README.md
-```
+| Component | Module | Equation |
+|---|---|---|
+| Base class module (shared feature extractor) | `gam2/models/base_module.py` | Eq. (1) |
+| Expert modules (one per LF source) | `gam2/models/expert_module.py` | Eq. (2) |
+| Inter-expert routing gates | `gam2/models/gating.py` | Eqs. (3)–(4) |
+| Expert quality gates | `gam2/models/gating.py` | Eq. (5) |
+| HF prediction module and fusion | `gam2/models/hf_module.py` | Eqs. (6)–(8) |
+| Bayesian output layer (mean / variance / KL) | `gam2/models/bayesian_linear.py` | Eqs. (9)–(11) |
+| Loss functions | `gam2/training/losses.py` | Eqs. (12)–(17) |
+| End-to-end trainer | `gam2/training/trainer.py` | Section 2.1.3 |
+| Gate-guided active learning (GALSA) | `gam2/active_learning/` | Algorithm 1 |
+| ONERA M6 case (HF surrogate, DO/RO, GALSA run) | `m6/` | Section 4 |
+| Reference examples (Example 3 and Example 4) | `examples/` | Section 3 |
 
 ## Installation
 
 ```bash
 pip install -r requirements.txt
+pip install -e .
 ```
 
-Requires Python >= 3.8 and PyTorch >= 2.0.
+Requires Python ≥ 3.9 and PyTorch ≥ 2.0.
 
-## Quick Start
+## Model
 
 ```python
 import torch
-from gam2.models.dg_moe_bnn import DGMoEBNN
-from gam2.training.trainer import Trainer
+from gam2 import DGMoEBNN
 
-# Define a 3-fidelity problem (2 LF + 1 HF), input_dim=1
 model = DGMoEBNN(
-    input_dim=1,
-    num_lf=2,
-    hidden_dim=20,
-    activation='tanh',
-    residual=True,
-    quality_mode='softmax_input',
-    routing_init=-2.0,
-    bayesian_bias=True,
+    input_dim=10,          # d
+    num_lf_models=2,       # s - 1
+    output_dim=1,
 )
 
-# Prepare data: list of (X_t, Y_t) for each LF, plus (X_hf, Y_hf)
-datasets_lf = [(X_lf1, Y_lf1), (X_lf2, Y_lf2)]
-dataset_hf = (X_hf, Y_hf)
-
-# Train end-to-end
-trainer = Trainer(model, train_mode='e2e', e2e_epochs=15000, e2e_hf_weight=10.0)
-trainer.train(datasets_lf, dataset_hf)
-
-# Predict with uncertainty
-mu, var = model.predict(X_test)
+x = torch.randn(8, 10)
+mu, var, preds, q, alphas = model(x)
+# mu, var : (8, 1)      predictive mean and variance, Eq. (10)-(11)
+# preds   : list of s-1 LF predictions
+# q       : list of s-1 quality gates, Eq. (5)
+# alphas  : {(i, j): alpha_ij}, Eq. (3)
 ```
 
-## Run Examples
+The architecture is parameterised entirely by constructor arguments —
+`hidden_size`, `kernel_size`, `activation`, `expert_layers`, `hf_layers`,
+`gate_hidden`, `routing_exchanges`, `residual`. The values used for each benchmark are
+listed per example in Table 1 of the paper; the defaults above are only a
+convenience and are not claimed to reproduce any reported number.
+
+### Routing, Eq. (4)
+
+`r_t = Σ_{i≠t} α_it h_i⁻` is a coupled system: the features `h_i⁻` themselves
+depend on the routed inputs. The implementation solves it with
+`routing_exchanges` Jacobi exchanges (default one): all expert features are
+first computed with `r_t = 0`, and the routed inputs are then formed from those
+features. One exchange is what the paper reports, and it exchanges information
+in both directions for every ordered pair `(i, t)`. `stage=1` evaluates the
+experts without routing.
+
+### Fusion, Eq. (6)
+
+The HF module receives the concatenation
+`[q_1 y_1, …, q_{s-1} y_{s-1}; h_base]`, i.e. `h + s - 1` inputs for scalar
+expert outputs (see `model.architecture_summary()`). With
+`residual=True` (the default) its output is added to the fused LF
+prediction, so the network represents the correction
+`y_s = Σ_t q_t y_t + W_s^out f_HF(...)`; on Example 3 this halves the RMSE.
+
+## Training
+
+```python
+from gam2 import GAM2Trainer
+
+datasets = [
+    (X_lf1, y_lf1),
+    (X_lf2, y_lf2),
+    (X_hf,  y_hf),          # the HF dataset is the last element
+]
+trainer = GAM2Trainer(model, base_lr=1e-3, lambda_gate=0.01, kl_weight=1.0)
+history = trainer.train(datasets, torch.device('cpu'), mode='e2e',
+                        e2e_epochs=1000, e2e_hf_weight=5.0)
+```
+
+The objective is the multi-task loss of Eq. (17): the mean squared error of
+each expert, the HF loss of Eq. (14) (`MSE + KL/N`), and the gate-sparsity
+penalty of Eq. (16).
+
+## Tests
 
 ```bash
-cd examples
-python demo.py          # 5 synthetic benchmark demos
-python E1_Forrester.py  # Reproduces Example 1 from the paper
+python tests/test_architecture.py
 ```
+
+The checks verify the widths and activations of the configuration table
+(`h + s - 1` fusion input, `2h` expert input, one gate per ordered pair), that
+the quality gates form a softmax, that the predictive variance is non-negative,
+and that an end-to-end training step runs.
 
 ## Citation
 
-If you find this code useful, please cite:
-
 ```bibtex
-@article{GAM2_2026,
-  title={Arbitrary-fidelity metamodeling via dual-gated mixture-of-experts and Bayesian active learning},
-  author={},
-  journal={},
-  year={2026}
+@article{gam2_2026,
+  title   = {Unified Fidelity-Agnostic Multi-Fidelity Modeling via Dual-Gated
+             Mixture-of-Experts and Bayesian Learning},
+  author  = {Ren, Chengkun and Wang, Bomin and Xiong, Fenfen},
+  journal = {Structural and Multidisciplinary Optimization},
+  year    = {2026}
 }
 ```
 
 ## License
 
-This project is released under the MIT License.
+MIT — see `LICENSE`.
