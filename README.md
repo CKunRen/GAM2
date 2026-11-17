@@ -6,13 +6,10 @@ Reference implementation of the network and training procedure described in
 > Mixture-of-Experts and Bayesian Learning*
 
 This release contains the model, the training procedure and the gate-guided
-active-learning sampler, together with the scripts of the ONERA M6 case.
-It contains **no benchmark data**: the library is meant to be imported, and
-the M6 scripts expect the CFD data described in `m6/README.md`, which are
-available from the corresponding author on request. A single reference
-example, Example 3 of the paper, is provided in `examples/`; it generates
-its own data from the published formulas and reproduces the reported
-benchmark at the published configuration.
+active-learning sampler. It contains **no benchmark data**: the library is
+meant to be imported, and the two reference examples in `examples/` generate
+their own data from the published formulas and reproduce the reported
+benchmarks at the published configuration.
 
 ## What is included
 
@@ -27,7 +24,6 @@ benchmark at the published configuration.
 | Loss functions | `gam2/training/losses.py` | Eqs. (12)–(17) |
 | End-to-end trainer | `gam2/training/trainer.py` | Section 2.1.3 |
 | Gate-guided active learning (GALSA) | `gam2/active_learning/` | Algorithm 1 |
-| ONERA M6 case (HF surrogate, DO/RO, GALSA run) | `m6/` | Section 4 |
 | Reference examples (Example 3 and Example 4) | `examples/` | Section 3 |
 
 ## Installation
