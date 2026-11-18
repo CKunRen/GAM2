@@ -39,7 +39,7 @@ class DGMoEBNN(nn.Module):
                  activation: str = 'leaky_relu', expert_layers: int = 2,
                  hf_layers: int = 2, gate_hidden: int = 16,
                  routing_exchanges: int = 1, routing_init: float = -2.0,
-                 bayesian_bias: bool = True, residual: bool = True):
+                 bayesian_bias: bool = False, residual: bool = True):
         super().__init__()
         if num_lf_models < 1:
             raise ValueError('at least one low-fidelity model is required')

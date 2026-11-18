@@ -24,7 +24,7 @@ class BayesianLinear(nn.Module):
     """Variational Bayesian linear layer with a standard-normal prior."""
 
     def __init__(self, in_features: int, out_features: int,
-                 bias: bool = True):
+                 bias: bool = False):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
