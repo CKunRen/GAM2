@@ -92,7 +92,8 @@ def main():
     pred = mu.cpu().numpy().ravel() * std + mean
     truth = hf(x_test)
     rmse = float(np.sqrt(np.mean((pred - truth) ** 2)))
-    print(f'RMSE = {rmse:.4f}   (paper: 0.3267 +/- 0.0547)')
+    nrmse = rmse / float(truth.max() - truth.min())
+    print(f'NRMSE = {nrmse:.4f}   (paper: 0.0981)')
 
 
 if __name__ == '__main__':

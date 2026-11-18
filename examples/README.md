@@ -44,7 +44,7 @@ Table 1 for the network.
 ## Expected output
 
 ```
-RMSE = 0.314   (paper: 0.3267 +/- 0.0547)
+NRMSE = 0.0883   (paper: 0.0981)
 ```
 
 Measured with seed 42 on CPU. The exact value depends on the seed; the paper
@@ -78,6 +78,5 @@ python examples/e4_dixon_price_32d.py --n-lf 2000 --n-hf 200 --epochs 30
 Expected:
 
 ```
-RMSE  = 17.5 ...   (paper NRMSE 0.0055)
-NRMSE = 0.0052     (paper: 0.0055)
+NRMSE = 0.00412   (paper: 0.0055)
 ```

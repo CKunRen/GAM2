@@ -12,7 +12,8 @@ network follows Table 1 (h = 128, convolutional stem with kernel 1, LeakyReLU,
 two expert layers, two deterministic HF layers, lambda_gate = 0.01, HF residual
 skip).
 
-The reported metric is the mean squared error on the standardized HF response.
+The reported metric is the normalized RMSE (RMSE divided by the range of
+the HF test responses), as in Table 5 of the paper.
 
 Run:  python examples/e4_dixon_price_32d.py [--n-lf 200000] [--n-hf 2000]
                                              [--epochs 5000] [--seed 42]
@@ -106,9 +107,7 @@ def main():
     mse /= x_test.shape[0]
     rmse = float(np.sqrt(mse))
     nrmse = rmse / float(np.max(hf(x_test)) - np.min(hf(x_test)))
-    print(f'RMSE  = {rmse:.2f}    (paper NRMSE 0.0055 -> RMSE 18.69)')
-    print(f'NRMSE = {nrmse:.5f}  (paper: 0.0055)')
-    print(f'MSE   = {mse:.2f}')
+    print(f'NRMSE = {nrmse:.5f}   (paper: 0.0055)')
 
 
 if __name__ == '__main__':

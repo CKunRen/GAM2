@@ -1,0 +1,4 @@
+architecture: {'input_dim': 32, 'use_conv': True, 'hidden_size': 128, 'num_lf_models': 1, 'base_length': 32, 'expert_in': 256, 'hf_in': 129, 'hf_in_expected': 129, 'routing_gates': 0}
+RMSE  = 17.63    (paper NRMSE 0.0055 -> RMSE 18.69)
+NRMSE = 0.00412  (paper: 0.0055)
+MSE   = 310.93
