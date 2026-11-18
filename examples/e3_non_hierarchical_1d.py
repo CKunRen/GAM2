@@ -76,7 +76,7 @@ def main():
         input_dim=1, num_lf_models=2, hidden_size=32, output_dim=1,
         use_conv=False, base_layers=2, expert_layers=1, hf_layers=1,
         activation='tanh', gate_hidden=16, routing_exchanges=1,
-        routing_init=-2.0, bayesian_bias=True, residual=True,
+        routing_init=-2.0, residual=True,
     ).to(device)
     print('architecture:', model.architecture_summary())
 

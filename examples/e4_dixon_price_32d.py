@@ -84,7 +84,7 @@ def main():
         use_conv=True, kernel_size=1, conv_padding=0, base_layers=1,
         expert_layers=2, hf_layers=2, activation='leaky_relu',
         gate_hidden=16, routing_exchanges=1, routing_init=-2.0,
-        bayesian_bias=True, residual=True,
+        residual=True,
     ).to(device)
     print('architecture:', model.architecture_summary())
 
