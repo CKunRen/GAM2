@@ -25,19 +25,27 @@ class HFPredictionModule(nn.Module):
                  activation: str = 'relu', bias: bool = True,
                  residual: bool = False):
         super().__init__()
-        if hidden_layers < 1:
-            raise ValueError('hidden_layers must be >= 1')
+        if hidden_layers < 0:
+            raise ValueError('hidden_layers must be >= 0')
         in_dim = hidden_size + num_experts * output_dim
         self.in_dim = in_dim
         self.hidden_layers = hidden_layers
         self.residual = residual
 
-        layers = [nn.Linear(in_dim, hidden_size), make_activation(activation)]
-        for _ in range(hidden_layers - 1):
-            layers += [nn.Linear(hidden_size, hidden_size),
-                       make_activation(activation)]
-        self.layers = nn.Sequential(*layers)
-        self.output = BayesianLinear(hidden_size, output_dim, bias=bias)
+        if hidden_layers == 0:
+            # Example 1 of the paper: the Bayesian layer is applied directly
+            # to the fused representation, with no deterministic layer in between.
+            self.layers = nn.Identity()
+            bay_in = in_dim
+        else:
+            layers = [nn.Linear(in_dim, hidden_size),
+                      make_activation(activation)]
+            for _ in range(hidden_layers - 1):
+                layers += [nn.Linear(hidden_size, hidden_size),
+                           make_activation(activation)]
+            self.layers = nn.Sequential(*layers)
+            bay_in = hidden_size
+        self.output = BayesianLinear(bay_in, output_dim, bias=bias)
 
     def forward(self, fused: torch.Tensor, skip: torch.Tensor = None):
         h_s = self.layers(fused)

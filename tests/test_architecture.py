@@ -125,6 +125,30 @@ class TestArchitecture(unittest.TestCase):
         for name, p in m.named_parameters():
             self.assertIsNotNone(p.grad, f'no gradient for {name}')
 
+    def test_table1_configurations(self):
+        """Every configuration of Table 1 can be built and run forward."""
+        configs = [
+            # d, s, h, conv, expert, hf, act
+            (1, 3, 20, False, 1, 0, 'tanh'),        # E1
+            (10, 3, 16, True, 2, 1, 'leaky_relu'),  # E2
+            (1, 3, 32, False, 1, 1, 'tanh'),        # E3
+            (32, 2, 128, True, 2, 2, 'leaky_relu'),  # E4
+            (2, 4, 24, False, 1, 1, 'tanh'),        # E5
+            (15, 4, 48, True, 2, 1, 'leaky_relu'),  # E6
+            (6, 4, 48, True, 2, 1, 'leaky_relu'),   # E7
+            (1, 3, 32, False, 1, 1, 'tanh'),        # E8
+        ]
+        for d, s, h, use_conv, expert, hf, act in configs:
+            m = DGMoEBNN(d, s - 1, hidden_size=h, use_conv=use_conv,
+                         base_layers=2 if not use_conv else 1,
+                         expert_layers=expert, hf_layers=hf, activation=act,
+                         kernel_size=1, conv_padding=0, residual=True)
+            x = torch.randn(4, d) if d > 1 else torch.randn(4, 1)
+            mu, var, _, _, _ = m(x)
+            self.assertEqual(tuple(mu.shape), (4, 1))
+            self.assertTrue(torch.isfinite(mu).all())
+            self.assertTrue(torch.isfinite(var).all())
+
     def test_training_step(self):
         from gam2 import GAM2Trainer
         device = torch.device('cpu')
